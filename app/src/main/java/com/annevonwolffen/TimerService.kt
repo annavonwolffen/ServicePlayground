@@ -8,13 +8,13 @@ import android.app.PendingIntent
 import android.app.Service
 import android.content.Context
 import android.content.Intent
+import android.content.IntentFilter
 import android.content.pm.PackageManager
 import android.os.Binder
 import android.os.Build
-import android.os.CountDownTimer
 import android.os.IBinder
 import android.util.Log
-import androidx.core.app.ActivityCompat
+import android.widget.RemoteViews
 import androidx.core.app.NotificationCompat
 import androidx.core.app.NotificationManagerCompat
 import androidx.core.content.ContextCompat
@@ -26,10 +26,13 @@ class TimerService : Service() {
     private lateinit var timer: Timer
 
     private var timeElapsed: Int = 0
+    private var batteryValue: Float = 0f
 
     private var timeElapsedListener: TimerTickListener? = null
 
     private val binder = TimerServiceBinder()
+
+    private lateinit var receiver: BatteryBroadcastReceiver
 
     fun setTimerTickListener(listener: TimerTickListener) {
         timeElapsedListener = listener
@@ -38,6 +41,14 @@ class TimerService : Service() {
     override fun onCreate() {
         super.onCreate()
         Log.d("TIMER_SERVICE", "TimerService: onCreate")
+
+        receiver = BatteryBroadcastReceiver { batteryLevel ->
+            batteryValue = batteryLevel * 100
+            updateNotification()
+        }
+
+        val intentFilter = IntentFilter(Intent.ACTION_BATTERY_CHANGED)
+        registerReceiver(receiver, intentFilter)
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
@@ -86,17 +97,23 @@ class TimerService : Service() {
         intentStopTimer.action = STOP_TIMER_ACTION
         val pendingIntentStopTimer = PendingIntent.getService(this, 0, intentStopTimer, PendingIntent.FLAG_IMMUTABLE)
 
+        val notificationLayout = RemoteViews(packageName, R.layout.notification_layout)
+        notificationLayout.setTextViewText(R.id.timer_notification_value, "Timer value: $timeElapsed")
+        notificationLayout.setTextViewText(R.id.battery_notification_value, "Battery value: $batteryValue")
+
         return NotificationCompat.Builder(this, notificationChannelId)
             .setContentTitle("Timer Service")
-            .setContentText(millis?.toString().orEmpty())
             .setSmallIcon(R.drawable.timer_24)
+            .setStyle(NotificationCompat.DecoratedCustomViewStyle())
+            .setCustomContentView(notificationLayout)
             .setPriority(NotificationCompat.PRIORITY_MAX)
+            .setOnlyAlertOnce(true)
             .addAction(R.drawable.start_24, "Start timer", pendingIntentStartTimer)
             .addAction(R.drawable.stop_24, "Stop timer", pendingIntentStopTimer)
             .build()
     }
 
-    private fun updateNotification(millis: Int) {
+    private fun updateNotification() {
         val notificationManager = NotificationManagerCompat.from(this)
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
             if (ContextCompat.checkSelfPermission(
@@ -104,10 +121,10 @@ class TimerService : Service() {
                     Manifest.permission.POST_NOTIFICATIONS
                 ) == PackageManager.PERMISSION_GRANTED
             ) {
-                notificationManager.notify(NOTIFICATION_ID, createNotification(millis))
+                notificationManager.notify(NOTIFICATION_ID, createNotification())
             }
         } else {
-            notificationManager.notify(NOTIFICATION_ID, createNotification(millis))
+            notificationManager.notify(NOTIFICATION_ID, createNotification())
         }
     }
 
@@ -116,7 +133,7 @@ class TimerService : Service() {
         timer.scheduleAtFixedRate(object : TimerTask() {
             override fun run() {
                 timeElapsed++
-                updateNotification(timeElapsed)
+                updateNotification()
                 timeElapsedListener?.onTick(timeElapsed)
             }
         }, 0, 1000)
@@ -128,6 +145,7 @@ class TimerService : Service() {
 
     override fun onDestroy() {
         Log.d("TIMER_SERVICE", "TimerService: onDestroy")
+        unregisterReceiver(receiver)
         super.onDestroy()
     }
 
